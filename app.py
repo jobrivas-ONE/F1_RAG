@@ -42,7 +42,7 @@ def check_password():
                 st.session_state.password_input == PASSWORD):
                 st.session_state["password_correct"] = True
                 st.success("¡Acceso concedido! Recargando...")
-                st.experimental_rerun() # Forzar un rerun para ocultar el login
+                st.rerun() # Forzar un rerun para ocultar el login
             else:
                 st.error("😕 Usuario o contraseña incorrectos")
         return False
