@@ -86,7 +86,7 @@ def cargar_recursos():
 
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vector_store = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
-    llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.2, convert_system_message_to_human=True)
+    llm = ChatGoogleGenerativeAI(model="gemini-1.0-pro", temperature=0.2, convert_system_message_to_human=True)
     retriever = vector_store.as_retriever(search_kwargs={'k': 5}) # Recupera 5 documentos más relevantes
     
     template = """
