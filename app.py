@@ -1,36 +1,34 @@
 import streamlit as st
 import os
+import io
+import pandas as pd
+from PIL import Image
+
+# --- SOLUCIÓN TEMPORAL PARA COMPATIBILIDAD DE SQLITE3 EN STREAMLIT CLOUD (SI ES NECESARIO) ---
+# Si el error "sqlite3.OperationalError" persiste, intenta descomentar las siguientes dos líneas.
+# Sin embargo, con "pysqlite3-binary" y la inicialización explícita, a menudo no son necesarias.
+# __import__('pysqlite3')
+# import sys
+# sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+# ------------------------------------------------------------------------------------------
+
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
-from PIL import Image
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(
+    page_title="Asistente de Información de Estudiantes - UOH",
+    page_icon="🎓",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-# ... (el resto de tus imports) ...
-
-# --- IMPORTANTE: Configura tu clave de API aquí si ejecutas localmente sin Streamlit Cloud secrets ---
-# En Streamlit Cloud, la API Key debe gestionarse vía st.secrets (configuración avanzada)
-# Si lo ejecutas localmente, puedes descomentar la línea de abajo y poner tu clave.
-# os.environ["GOOGLE_API_KEY"] = "TU_API_KEY_AQUI" 
-
-# --- Credenciales de Autenticación para el prototipo ---
-# En un entorno de producción, esto debería gestionarse de forma más segura (ej. st.secrets, bases de datos)
-USERNAME = "muriel.espinosa"
-PASSWORD = "MurEsp2017..??" # !!! CAMBIAR ESTO POR UN VALOR MÁS FUERTE Y SEGURO !!!
-
-# --- Configuración de la página de Streamlit ---
-st.set_page_config(page_title="Asistente Académico de Ingeniería", page_icon="🎓", layout="wide")
-
-# --- Función de Autenticación ---
+# --- Autenticación (con corrección de st.experimental_rerun a st.rerun) ---
 def check_password():
     """Returns `True` if the user's password is correct, `False` otherwise."""
 
-    # Inicializar el estado de autenticación si no existe
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
     
@@ -45,154 +43,144 @@ def check_password():
         submitted = st.form_submit_button("Entrar")
 
         if submitted:
+            # Leer credenciales desde st.secrets si están configuradas
+            if "USERNAME" in st.secrets and "PASSWORD" in st.secrets:
+                USERNAME = st.secrets["USERNAME"]
+                PASSWORD = st.secrets["PASSWORD"]
+            else:
+                # Fallback a credenciales hardcodeadas (¡CAMBIAR ESTO EN PRODUCCIÓN!)
+                USERNAME = "usuario_sochedi"
+                PASSWORD = "password_seguro_y_largo" # <--- ¡CAMBIA ESTO!
+
             if (st.session_state.username_input == USERNAME and 
                 st.session_state.password_input == PASSWORD):
                 st.session_state["password_correct"] = True
                 st.success("¡Acceso concedido! Recargando...")
-                st.rerun() # Forzar un rerun para ocultar el login
+                st.rerun() # <-- CORRECCIÓN AQUÍ
             else:
                 st.error("😕 Usuario o contraseña incorrectos")
         return False
 
-# --- Inclusión de Logos en el Encabezado ---
-col1, col2 = st.columns([1, 5]) # Ajusta la proporción de las columnas para los logos y el título
-
-with col1:
-    try:
-        logo_uoh = Image.open("logo_uoh.png")
-        st.image(logo_uoh, width=100) # Ajusta el ancho según sea necesario
-    except FileNotFoundError:
-        st.error("Logo UOH no encontrado. Asegúrate de que 'logo_uoh.png' esté en la carpeta.")
-    
-    try:
-        logo_eIng = Image.open("logo_eIng.png")
-        st.image(logo_eIng, width=100) # Ajusta el ancho según sea necesario
-    except FileNotFoundError:
-        st.error("Logo E.Ing no encontrado. Asegúrate de que 'logo_eIng.png' esté en la carpeta.")
-
-with col2:
-    st.title("🎓 Asistente Académico IA de Ingeniería")
-st.write("Bienvenido/a. Soy tu asistente para consultar patrones y tendencias de los datos agregados de estudiantes.")
-
-
+# --- Cargar recursos (LLM y Vector Store) ---
 @st.cache_resource
 def cargar_recursos():
-    """
-    Carga los recursos pesados (modelo, DB) una sola vez para que la app sea rápida.
-    """
-    if not os.path.exists("chroma_db"):
-        st.error("¡La base de datos 'chroma_db' no ha sido creada! Por favor, ejecuta primero el script 'preparar_base_de_datos.py'.")
-        return None
+    # Cargar la GOOGLE_API_KEY desde los secretos de Streamlit Cloud
+    if "GOOGLE_API_KEY" not in st.secrets:
+        st.error("🚨 La clave GOOGLE_API_KEY no está configurada en los secretos de Streamlit.")
+        st.stop()
+    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 
-    st.info("Cargando base de datos y modelo... Por favor, espera.")
-    
-    # Comprobamos la API Key antes de cargar los embeddings
-    if not os.environ.get("GOOGLE_API_KEY"):
-        st.error("Error: GOOGLE_API_KEY no configurada. No se pueden cargar los modelos.")
-        return None
-
+    # Inicializar el modelo de Embeddings
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
-    llm = ChatGoogleGenerativeAI(model="gemini-1.0-pro", temperature=0.2, convert_system_message_to_human=True)
-    retriever = vector_store.as_retriever(search_kwargs={'k': 5}) # Recupera 5 documentos más relevantes
-    
-    template = """
-    Eres un asistente académico experto en analizar datos de estudiantes. Tu objetivo en esta FASE 1 es brindar insights sobre **patrones, tendencias y perfiles cualitativos a nivel agregado**. NO debes responder preguntas sobre datos específicos de un solo estudiante (ej. RUT, nombre, historial individual).
 
-    Usa la siguiente información de contexto para responder la pregunta de manera precisa y concisa, siempre enfocándote en las tendencias generales.
-    El contexto se compone de fichas de estudiantes desidentificadas. Analízalas para identificar patrones.
-    Si la información para identificar un patrón no está en el contexto, indica que no tienes datos suficientes. No inventes respuestas.
-    Organiza tu respuesta de forma clara y fácil de leer.
+    # Inicializar el modelo de lenguaje (LLM)
+    llm = ChatGoogleGenerativeAI(model="gemini-1.0-pro", temperature=0.2, convert_system_message_to_human=True) # <-- MODELO ESTABLE
 
-    Contexto:
+    # Inicializar ChromaDB (con cliente persistente explícito)
+    from chromadb import PersistentClient
+    try:
+        # Intenta cargar el cliente de persistencia
+        client = PersistentClient(path="chroma_db")
+        # Asegúrate de que el collection_name coincida con el que usaste en preparar_base_de_datos.py
+        # Si no especificaste uno, el valor por defecto de LangChain suele ser "langchain"
+        vector_store = Chroma(
+            client=client,
+            collection_name="langchain", # O el nombre que usaste si lo especificaste
+            embedding_function=embeddings
+        )
+        st.sidebar.success("✅ Base de conocimiento cargada.")
+    except Exception as e:
+        st.error(f"❌ Error al cargar ChromaDB: {e}. Asegúrate que la carpeta 'chroma_db' está completa y no está corrupta.")
+        st.stop() # Detener la ejecución si falla la carga
+        return None # Devuelve None si falla la carga
+
+    # Plantilla de Prompt (adaptada para un asistente académico)
+    template = """Eres un asistente virtual de la Escuela de Ingeniería UOH.
+    Tu objetivo es ayudar a los usuarios a obtener información sobre el desempeño académico de los estudiantes, sus datos y sus situaciones.
+    Responde las preguntas del usuario basándote únicamente en el siguiente contexto:
     {context}
+    Si la pregunta no se puede responder con la información proporcionada en el contexto, simplemente di que no tienes suficiente información para responder.
+    No intentes inventar una respuesta.
+    Mantén tus respuestas claras, concisas y en español.
 
-    Pregunta:
-    {question}
+    Pregunta del usuario: {question}
+    Respuesta:"""
+    QA_CHAIN_PROMPT = PromptTemplate.from_template(template)
 
-    Respuesta útil:
-    """
-    prompt = PromptTemplate(template=template, input_variables=["context", "question"])
-    
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": prompt}
+    # Crear la cadena de RetrievalQA
+    chain = RetrievalQA.from_chain_type(
+        llm,
+        retriever=vector_store.as_retriever(search_kwargs={"k": 3}), # Busca los 3 documentos más relevantes
+        chain_type_kwargs={"prompt": QA_CHAIN_PROMPT},
+        return_source_documents=True
     )
-    st.success("¡Recursos cargados! Ya puedes hacer tus preguntas sobre patrones.")
-    return qa_chain
+    return chain
 
-# --- Lógica principal de la aplicación, protegida por la autenticación ---
-if not check_password():
-    st.stop() # Detiene la ejecución si el usuario no está autenticado
+# --- Lógica principal de la aplicación ---
+def main():
+    if not check_password():
+        st.stop() # Detener la ejecución si no está autenticado
 
-# --- Si la autenticación es exitosa, el resto del código se ejecuta ---
-if not os.environ.get("GOOGLE_API_KEY"): # Doble chequeo por si no se cargó por Streamlit Cloud o local
-    st.warning("🚨 ¡ALERTA! La GOOGLE_API_KEY no está configurada. La aplicación no funcionará correctamente.")
-else:
+    # Cargar y mostrar logos
+    col1, col2, col3 = st.columns([1, 4, 1])
+    with col1:
+        st.image(Image.open(io.BytesIO(open("logo_uoh.png", "rb").read())), width=80)
+    with col2:
+        st.title("Asistente de Información de Estudiantes")
+        st.markdown("##### Escuela de Ingeniería UOH")
+    with col3:
+        st.image(Image.open(io.BytesIO(open("logo_eIng.png", "rb").read())), width=80)
+
+    st.markdown("---")
+    st.write("¡Hola! Soy tu asistente virtual. Puedes preguntarme sobre el desempeño académico de los estudiantes de la UOH.")
+    st.write("Por ejemplo: '¿Cuál es el PPA de un estudiante con RUT 12.345.678-9?' o '¿Qué asignaturas ha cursado el estudiante con RUT 12.345.678-9 y cómo le fue?'")
+
+    # Botón para limpiar caché y recargar la aplicación (útil para depuración)
+    if st.button("🔄 Limpiar caché y Recargar la App"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
+
+    # Cargar recursos (LLM y Vector Store)
     chain = cargar_recursos()
 
-    if chain:
-        # Inicializamos las variables en el estado de la sesión si no existen
-        if 'pregunta_usuario' not in st.session_state:
-            st.session_state.pregunta_usuario = ""
-        if 'respuesta' not in st.session_state:
-            st.session_state.respuesta = None
-        if 'fuentes' not in st.session_state:
-            st.session_state.fuentes = None
+    if chain is None:
+        st.error("No se pudo inicializar el asistente. Por favor, revisa los logs.")
+        st.stop()
+
+    # Inicializar historial de chat
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Mostrar mensajes del historial
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Entrada de usuario
+    if prompt := st.chat_input("¿En qué puedo ayudarte?"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Buscando y generando respuesta..."):
+                response = chain.invoke(prompt)
+                st.markdown(response["result"])
+                st.session_state.messages.append({"role": "assistant", "content": response["result"]})
+
+                # Opcional: Mostrar documentos fuente para depuración
+                # with st.expander("Ver documentos fuente"):
+                #     for doc in response["source_documents"]:
+                #         st.write(doc.page_content)
+                #         st.write(f"Metadata: {doc.metadata}")
+
+if __name__ == "__main__":
+    # Asegurarse de que el directorio 'chroma_db' exista para que PersistentClient no falle al inicio.
+    # En Streamlit Cloud, esto ya debería estar manejado porque la carpeta se sube.
+    if not os.path.exists("chroma_db"):
+        st.warning("La carpeta 'chroma_db' no se encontró. Asegúrate de que está en el mismo directorio que app.py.")
+        # Aquí podrías detener la app o redirigir a un mensaje de error si no es para despliegue.
+        # st.stop() # Descomentar esto si la ausencia de la DB debe ser un error fatal.
         
-        with st.form(key='query_form'):
-            pregunta_actual = st.text_area(
-                "Escribe tu pregunta aquí (enfocada en patrones o tendencias):",
-                value=st.session_state.pregunta_usuario,
-                height=150, 
-                placeholder="Ej: Describe los factores comunes en los estudiantes con alto rendimiento en el primer año."
-            )
-            submit_button = st.form_submit_button(label='Generar Respuesta 🚀')
-
-        if submit_button:
-            st.session_state.pregunta_usuario = pregunta_actual # Guardar la pregunta en sesión
-
-            # --- Lógica de FASE 1: Limitar a preguntas sobre patrones/tendencias, rechazando preguntas individuales ---
-            # Palabras clave que sugieren una pregunta sobre un estudiante específico
-            pregunta_individual_keywords = ["rut", "id de estudiante", "nombre", "historial de", "situación de", "perfil de", "dame la info de"]
-            es_pregunta_individual = any(keyword in pregunta_actual.lower() for keyword in pregunta_individual_keywords)
-
-            if es_pregunta_individual:
-                st.session_state.respuesta = (
-                    "**Respuesta del Sistema (Fase 1):**\n\n"
-                    "En esta Fase 1, el asistente está diseñado para brindar información sobre **tendencias y patrones agregados**. "
-                    "Las consultas sobre datos específicos de un estudiante individual (ej. usando RUT, nombre o ID) "
-                    "no están habilitadas para garantizar la privacidad y se implementarán en fases futuras "
-                    "con estrictos controles de acceso."
-                )
-                st.session_state.fuentes = [] # No hay fuentes para este tipo de respuesta de política
-            elif not pregunta_actual: # Manejar el caso de una pregunta vacía
-                st.warning("Por favor, ingresa una pregunta para generar una respuesta.")
-                st.session_state.respuesta = None
-                st.session_state.fuentes = None
-            else: # Si la pregunta NO es individual y no está vacía, intentamos procesarla con RAG (para patrones agregados)
-                with st.spinner("Buscando en los archivos desidentificados y generando una respuesta... 🧠"):
-                    try:
-                        resultado = chain.invoke({"query": st.session_state.pregunta_usuario}) 
-                        st.session_state.respuesta = resultado["result"]
-                        st.session_state.fuentes = resultado["source_documents"]
-                    except Exception as e:
-                        st.error(f"Ocurrió un error al contactar la API. Revisa tu clave de API y la conexión a internet. Error: {e}")
-                        st.session_state.respuesta = None
-                        st.session_state.fuentes = None
-
-        # Mostramos la respuesta si existe en el estado de la sesión
-        if st.session_state.respuesta:
-            st.write("### Respuesta a tu consulta:")
-            st.info(st.session_state.respuesta)
-            
-            with st.expander("Ver fuentes de datos consultadas (Fichas desidentificadas)"):
-                if st.session_state.fuentes: # Solo iterar si hay fuentes
-                    for doc in st.session_state.fuentes:
-                        st.write("---")
-                        st.write(doc.page_content)
-                else:
-                    st.write("No hay fuentes de datos directas para esta respuesta (respuesta de política de la Fase 1).")
+    main()
