@@ -205,3 +205,20 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Ignorar archivos Excel/CSV originales
+*.xlsx
+*.csv
+
+# Ignorar la carpeta de datos sensibles (si aún la tuvieras)
+datos EIng/
+
+# Ignorar el script de preparación de la DB (ya se ejecutó localmente)
+preparar_base_de_datos.py
+
+# Ignorar archivos temporales y entornos virtuales de Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+.env
