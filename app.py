@@ -5,6 +5,13 @@ from langchain_community.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from PIL import Image
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
+
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+# ... (el resto de tus imports) ...
 
 # --- IMPORTANTE: Configura tu clave de API aquí si ejecutas localmente sin Streamlit Cloud secrets ---
 # En Streamlit Cloud, la API Key debe gestionarse vía st.secrets (configuración avanzada)
