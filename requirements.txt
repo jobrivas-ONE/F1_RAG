@@ -1,10 +1,10 @@
-streamlit
-langchain>=0.1.0
-langchain-google-genai>=1.0.0
-google-generativeai>=0.4.0
-langchain-community
-chromadb
-Pillow
-pandas
-openpyxl
+streamlit==1.33.0
+langchain==0.1.16
+langchain-google-genai==1.0.2
+google-generativeai==0.5.0
+langchain-community==0.0.32
+chromadb==0.4.24
+Pillow==10.1.0
+pandas==2.1.4
+openpyxl==3.1.2
 
