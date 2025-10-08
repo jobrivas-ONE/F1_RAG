@@ -3,6 +3,7 @@ import os
 import io
 import pandas as pd
 from PIL import Image
+import re # <-- Añadir esta importación para expresiones regulares
 
 # --- SOLUCIÓN TEMPORAL PARA COMPATIBILIDAD DE SQLITE3 EN STREAMLIT CLOUD (SI ES NECESARIO) ---
 # Si el error "sqlite3.OperationalError" persiste, intenta descomentar las siguientes dos líneas.
@@ -24,6 +25,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- Función para detectar RUTs (NUEVA FUNCIÓN) ---
+def contains_rut(text):
+    # Expresión regular para detectar RUTs chilenos (XX.XXX.XXX-X o X.XXX.XXX-X)
+    # Permite puntos opcionales y guion.
+    rut_pattern = r'\b\d{1,2}\.\d{3}\.\d{3}[-][0-9kK]\b|\b\d{7,8}[-][0-9kK]\b'
+    return re.search(rut_pattern, text) is not None
 
 # --- Autenticación (con corrección de st.experimental_rerun a st.rerun) ---
 def check_password():
@@ -96,7 +104,8 @@ def cargar_recursos():
 
     # Plantilla de Prompt (adaptada para un asistente académico)
     template = """Eres un asistente virtual de la Escuela de Ingeniería UOH.
-    Tu objetivo es ayudar a los usuarios a obtener información sobre el desempeño académico de los estudiantes, sus datos y sus situaciones.
+    Tu objetivo es ayudar a los usuarios a obtener información SOBRE DATOS AGREGADOS DE LOS ESTUDIANTES.
+    NO PUEDES PROPORCIONAR INFORMACIÓN INDIVIDUALIZADA O PERSONAL DE NINGÚN ESTUDIANTE.
     Responde las preguntas del usuario basándote únicamente en el siguiente contexto:
     {context}
     Si la pregunta no se puede responder con la información proporcionada en el contexto, simplemente di que no tienes suficiente información para responder.
@@ -133,7 +142,9 @@ def main():
 
     st.markdown("---")
     st.write("¡Hola! Soy tu asistente virtual. Puedes preguntarme sobre el desempeño académico de los estudiantes de la UOH.")
-    st.write("Por ejemplo: '¿Cuál es el PPA de un estudiante con RUT 12.345.678-9?' o '¿Qué asignaturas ha cursado el estudiante con RUT 12.345.678-9 y cómo le fue?'")
+    st.write("Por ejemplo: '¿Cuál es el PPA promedio de los estudiantes de Ingeniería Civil?' o '¿Cuántos estudiantes reprobaron Cálculo I el semestre pasado?'")
+    st.write("**⚠️ Importante:** Por motivos de privacidad, no puedo responder preguntas sobre información personal o datos individualizados de estudiantes específicos (como su RUT, nombre o calificaciones personales).")
+
 
     # Botón para limpiar caché y recargar la aplicación (útil para depuración)
     if st.button("🔄 Limpiar caché y Recargar la App"):
@@ -165,22 +176,31 @@ def main():
 
         with st.chat_message("assistant"):
             with st.spinner("Buscando y generando respuesta..."):
-                response = chain.invoke(prompt)
-                st.markdown(response["result"])
-                st.session_state.messages.append({"role": "assistant", "content": response["result"]})
+                # --- LÓGICA DE PRIVACIDAD AÑADIDA AQUÍ ---
+                if contains_rut(prompt) or "personal" in prompt.lower() or "individual" in prompt.lower() or "nombre" in prompt.lower():
+                    response_text = "Lo siento, como asistente de la UOH, no puedo proporcionar información personal o individualizada de los estudiantes por razones de privacidad. Solo puedo responder preguntas sobre datos agregados."
+                    st.markdown(response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                else:
+                    # Si no es una pregunta de privacidad, procede con el RAG normal
+                    response = chain.invoke(prompt)
+                    st.markdown(response["result"])
+                    st.session_state.messages.append({"role": "assistant", "content": response["result"]})
 
-                # Opcional: Mostrar documentos fuente para depuración
-                # with st.expander("Ver documentos fuente"):
-                #     for doc in response["source_documents"]:
-                #         st.write(doc.page_content)
-                #         st.write(f"Metadata: {doc.metadata}")
+                    # Opcional: Mostrar documentos fuente para depuración (descomentar si es necesario)
+                    with st.expander("Ver documentos fuente"):
+                        if response["source_documents"]:
+                            for doc in response["source_documents"]:
+                                st.write(doc.page_content)
+                                st.write(f"Metadata: {doc.metadata}")
+                        else:
+                            st.write("No se encontraron documentos relevantes.")
+                # ----------------------------------------
 
 if __name__ == "__main__":
     # Asegurarse de que el directorio 'chroma_db' exista para que PersistentClient no falle al inicio.
-    # En Streamlit Cloud, esto ya debería estar manejado porque la carpeta se sube.
     if not os.path.exists("chroma_db"):
         st.warning("La carpeta 'chroma_db' no se encontró. Asegúrate de que está en el mismo directorio que app.py.")
-        # Aquí podrías detener la app o redirigir a un mensaje de error si no es para despliegue.
-        # st.stop() # Descomentar esto si la ausencia de la DB debe ser un error fatal.
+        # st.stop() # Si la ausencia de la DB debe ser un error fatal, descomentar
         
     main()
