@@ -76,7 +76,11 @@ def cargar_recursos():
     if "GOOGLE_API_KEY" not in st.secrets:
         st.error("🚨 La clave GOOGLE_API_KEY no está configurada en los secretos de Streamlit.")
         st.stop()
-    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+
+    # --- NUEVA LÍNEA: Asegura que la clave no tenga comillas ---
+    api_key_value = st.secrets["GOOGLE_API_KEY"].strip('"') 
+    os.environ["GOOGLE_API_KEY"] = api_key_value
+    # --------------------------------------------------------
 
     # Inicializar el modelo de Embeddings
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
